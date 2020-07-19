@@ -1,0 +1,5 @@
+###############################################################################
+# SET PREPROCESSING PARAMETERS                                                #
+###############################################################################
+RAW_DATA_PATH: data/raw/trump_twitter.json
+PROCESSED_DATA_DIR: data/processed
