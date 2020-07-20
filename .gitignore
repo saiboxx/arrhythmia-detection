@@ -136,3 +136,8 @@ data/*
 !data/.gitkeep
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+logs
+
+# Models
+models/*
+!models/.gitkeep

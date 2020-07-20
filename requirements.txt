@@ -1,6 +1,7 @@
 numpy
 pandas
 torch
+tensorboard
 torchsummary
 pyyaml
 tqdm

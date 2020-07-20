@@ -1,30 +1,31 @@
 import re
-import pickle
+from typing import Tuple
 import pandas as pd
 from tqdm import tqdm
-from torch import tensor
-from typing import Tuple
-from src.utils import timer, load_config
+from src.utils import Timer, load_config, save_pickle
 
 
 def main():
-    with timer('Loading config'):
+    with Timer('Loading config'):
         cfg = load_config()
 
-    with timer('Loading tweets'):
+    with Timer('Loading tweets'):
         tweets = load_raw_data(cfg['RAW_DATA_PATH'])
 
-    with timer('Cleaning sentences'):
+    with Timer('Cleaning sentences'):
         tweet_text = cleanse_sentences(list(tweets['text']))
 
-    with timer('Mapping characters to integers'):
-        tweet_enc, mapping_dict = map_tweets_to_int(tweet_text)
+    with Timer('Mapping characters to integers'):
+        tweet_enc, map_char_to_int, map_int_to_char = map_tweets_to_int(tweet_text)
 
-    with timer('Producing dataset'):
+    with Timer('Producing dataset'):
         tweet_train, tweet_label = produce_dataset(tweet_enc)
 
-        print(len(tweet_train))
-        print(len(tweet_label))
+    with Timer('Save dataset and mapping tables'):
+        save_pickle(tweet_train, cfg['PROCESSED_DATA_DIR'] + '/train.pkl')
+        save_pickle(tweet_label, cfg['PROCESSED_DATA_DIR'] + '/label.pkl')
+        save_pickle(map_char_to_int, cfg['PROCESSED_DATA_DIR'] + '/map_char_to_int.pkl')
+        save_pickle(map_int_to_char, cfg['PROCESSED_DATA_DIR'] + '/map_int_to_char.pkl')
 
 
 def load_raw_data(filepath: str) -> pd.DataFrame:
@@ -44,7 +45,7 @@ def cleanse_sentences(tweet_list: list) -> list:
     """
     Runs checks for the tweets so that most special characters,
     emojis, links and retweet tags are removed.
-    :param text_list: List containing tweets
+    :param tweet_list: List containing tweets
     :return: Cleansed list of strings.
     """
     result = []
@@ -68,7 +69,6 @@ def cleanse_sentences(tweet_list: list) -> list:
         tweet = tweet.replace("~", "")
         tweet = tweet.replace("...", "")
         tweet = tweet.replace("....", "")
-
         tweet = tweet.strip()
 
         if tweet != "":
@@ -77,12 +77,12 @@ def cleanse_sentences(tweet_list: list) -> list:
     return result
 
 
-def map_tweets_to_int(tweet_list: list) -> Tuple[list, dict]:
+def map_tweets_to_int(tweet_list: list) -> Tuple[list, dict, dict]:
     """
     Maps the cleansed tweets to lists of integer, which is better for further
     processing. The mapping table is also returned.
     :param text_list: List containing tweets
-    :return: Encoded tweets and mapping dictionary.
+    :return: Encoded tweets and mapping dictionaries.
     """
     unique_chars = sorted({char for word in tweet_list for char in word})
     mapping_char_to_int = {char: i for i, char in enumerate(unique_chars)}
@@ -94,14 +94,15 @@ def map_tweets_to_int(tweet_list: list) -> Tuple[list, dict]:
         tweet = [mapping_char_to_int[char] for char in list(tweet)]
         encoded_tweets.append(tweet)
 
-    return encoded_tweets, mapping_int_to_char
+    return encoded_tweets, mapping_char_to_int, mapping_int_to_char
 
 
-def produce_dataset(tweet_list: list) -> Tuple[tensor, tensor]:
+def produce_dataset(tweet_list: list) -> Tuple[list, list]:
     """
-    
-    :param tweet_list:
-    :return:
+    Generates the training dataset. The label is a letter and the features
+    consist of a sequence of chars coming before it, e.g. trum -> p, preside -> n.
+    :param tweet_list: List w/ tweets, best encoded as integers
+    :return: Tuple containing the dataset and accompanying labels.
     """
     dataset = []
     label = []
@@ -110,6 +111,8 @@ def produce_dataset(tweet_list: list) -> Tuple[tensor, tensor]:
             if i != 0:
                 dataset.append(tweet[:i])
                 label.append(char)
+
+    print("Dataset consists of {} samples.".format(len(dataset)))
     return dataset, label
 
 
