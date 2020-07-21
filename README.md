@@ -1,2 +1,2 @@
-# trump-tweet-generator
-Generate Tweets with LSTMs!
+# Trump Tweet Generator
+Generate Tweets with LSTMs or GRUs!
