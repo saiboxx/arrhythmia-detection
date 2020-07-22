@@ -5,5 +5,10 @@ tensorboard
 torchsummary
 pyyaml
 tqdm
+matplotlib
+jupyter
+pylttb
+xlrd
+sklearn
 
 -e .

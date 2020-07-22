@@ -1,119 +1,132 @@
+import os
 import re
 from typing import Tuple
+import numpy as np
 import pandas as pd
+from pylttb import lttb
+import multiprocessing as mp
 from tqdm import tqdm
+from collections import Counter
+from sklearn.model_selection import train_test_split
 from src.utils import Timer, load_config, save_pickle
 
 
 def main():
-    with Timer('Loading config'):
-        cfg = load_config()
+    cfg = load_config()
+    col_names = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
-    with Timer('Loading tweets'):
-        tweets = load_raw_data(cfg['RAW_DATA_PATH'])
+    with Timer('Obtaining file list'):
+        file_dir = cfg['RAW_DATA_PATH'] + '/ECGDataDenoised'
+        file_list = os.listdir(file_dir)
+        print('{} files found.'.format(len(file_list)))
 
-    with Timer('Cleaning sentences'):
-        tweet_text = cleanse_sentences(list(tweets['text']))
+    with Timer('Getting label list'):
+        labels = get_labels(cfg['RAW_DATA_PATH'] + '/Diagnostics.xlsx', file_list)
 
-    with Timer('Mapping characters to integers'):
-        tweet_enc, map_char_to_int, map_int_to_char = map_tweets_to_int(tweet_text)
+    with Timer('Loading & Downsampling files'):
+        ecg_data = get_ecg_data(file_dir,
+                                file_list,
+                                cfg['DOWNSAMPLE_THRESHOLD'],
+                                cfg['DATA_SLICE'],
+                                cfg['NUM_WORKERS'])
 
-    with Timer('Producing dataset'):
-        tweet_train, tweet_label = produce_dataset(tweet_enc)
+    with Timer('Splitting into Train & Test Set'):
+        x_train, x_test, y_train, y_test = train_test_split(ecg_data,
+                                                            labels,
+                                                            test_size=0.2,
+                                                            shuffle=True,
+                                                            stratify=labels,
+                                                            random_state=42)
 
-    with Timer('Save dataset and mapping tables'):
-        save_pickle(tweet_train, cfg['PROCESSED_DATA_DIR'] + '/train.pkl')
-        save_pickle(tweet_label, cfg['PROCESSED_DATA_DIR'] + '/label.pkl')
-        save_pickle(map_char_to_int, cfg['PROCESSED_DATA_DIR'] + '/map_char_to_int.pkl')
-        save_pickle(map_int_to_char, cfg['PROCESSED_DATA_DIR'] + '/map_int_to_char.pkl')
+        print('Final Training set has {} samples'.format(len(x_train)))
+        print('Final Test set has {} samples'.format(len(x_test)))
+        print('Distribution of labels in Training: {}'.format(Counter(y_train)))
+        print('Distribution of labels in Testing: {}'.format(Counter(y_test)))
+
+    with Timer('Saving generated arrays'):
+        save_pickle(x_train, cfg['PROCESSED_DATA_DIR'] + '/train_data.pkl')
+        save_pickle(y_train, cfg['PROCESSED_DATA_DIR'] + '/train_label.pkl')
+        save_pickle(x_test, cfg['PROCESSED_DATA_DIR'] + '/test_data.pkl')
+        save_pickle(y_test, cfg['PROCESSED_DATA_DIR'] + '/test_label.pkl')
 
 
-def load_raw_data(filepath: str) -> pd.DataFrame:
+def get_labels(file_path: str, file_list: list) -> list:
+    df = pd.read_excel(file_path)
+    file_list = [file[:-4] for file in file_list]
+
+    df['FileName'] = df['FileName'].astype('category')
+    df['FileName'].cat.set_categories(file_list, inplace=True)
+    df = df.sort_values(['FileName'])
+
+    labels = df['Rhythm'].tolist()
+
+    label_map = []
+    for l in labels:
+        if l == 'SR':
+            lab = 0
+        elif l == 'SB':
+            lab = 1
+        elif l == 'ST':
+            lab = 2
+        else:
+            lab = 3
+        label_map.append(lab)
+    return np.asarray(label_map)
+
+
+def get_ecg_data(file_dir: str,
+                 file_list: list,
+                 threshold: int,
+                 slice: int,
+                 num_worker: int) -> np.ndarray:
+    file_list_split = np.array_split(file_list, num_worker)
+
+    pool = mp.Pool(processes=num_worker)
+    results = [pool.apply_async(downsample_worker,
+                                args=(file_dir,
+                                      list(file_list_split[pos]),
+                                      threshold,
+                                      slice,
+                                      pos)) for pos in range(num_worker)]
+    output = [p.get() for p in results]
+    pool.close()
+    pool.join()
+
+    output.sort()
+    return np.concatenate([out[1] for out in output])
+
+
+def downsample_worker(file_dir: str, file_list: list, threshold: int, slice: int, pos: int) -> Tuple[int, np.ndarray]:
+    ecg_graphs = []
+    for file in tqdm(file_list, leave=False):
+        ecg = np.genfromtxt(os.path.join(file_dir, file), delimiter=',')
+        if len(ecg.shape) != 2:
+            print(ecg.shape)
+            print(file)
+            print('There is a faulty file in your directory! Please remove it.')
+
+        ecg_sampled = downsample(ecg[:slice], threshold)
+        ecg_sampled = np.expand_dims(ecg_sampled, axis=0)
+        ecg_graphs.append(ecg_sampled)
+
+    return pos, np.concatenate(ecg_graphs)
+
+
+def downsample(x: np.ndarray, threshold: int) -> np.ndarray:
     """
-    Load raw json file from trumptwitterarchive.com containing tweets.
-    :param filepath: Filepath pointing to a .json file with tweets
-    :return: Dataframe with the respective tweets.
+    Downsamples a given 2D-Array with time series data to a series with the
+    length specified in threshold. For downsampling the Largest-Triangle-Three-Buckets
+    algorithm is used.
+    :param x: 2D Array with time series data
+    :param threshold: Target size of time series
+    :return: Downsampled time series
     """
-    full_data = pd.read_json(filepath, orient='records')
-    full_data['source'] = full_data['source'].astype('string')
-    full_data['text'] = full_data['text'].astype('string')
-    full_data['is_retweet'] = full_data['is_retweet'].astype('bool')
-    return full_data
-
-
-def cleanse_sentences(tweet_list: list) -> list:
-    """
-    Runs checks for the tweets so that most special characters,
-    emojis, links and retweet tags are removed.
-    :param tweet_list: List containing tweets
-    :return: Cleansed list of strings.
-    """
-    result = []
-    for tweet in tweet_list:
-        tweet = re.sub(r'http\S+', '', tweet)
-        tweet = re.sub(r'(RT|rt)( @\w*)?[: ]', '', tweet)
-        tweet = tweet.lower()
-        tweet = (tweet.encode('ascii', 'ignore')).decode("utf-8")
-        tweet = tweet.replace("\\", "")
-        tweet = tweet.replace("\n", "")
-        tweet = tweet.replace("\r", "")
-        tweet = tweet.replace("}", "")
-        tweet = tweet.replace("{", "")
-        tweet = tweet.replace("[", "")
-        tweet = tweet.replace("]", "")
-        tweet = tweet.replace("*", "")
-        tweet = tweet.replace("_", "")
-        tweet = tweet.replace("/", "")
-        tweet = tweet.replace("`", "")
-        tweet = tweet.replace("|", "")
-        tweet = tweet.replace("~", "")
-        tweet = tweet.replace("...", "")
-        tweet = tweet.replace("....", "")
-        tweet = tweet.strip()
-
-        if tweet != "":
-            result.append(tweet)
-
-    return result
-
-
-def map_tweets_to_int(tweet_list: list) -> Tuple[list, dict, dict]:
-    """
-    Maps the cleansed tweets to lists of integer, which is better for further
-    processing. The mapping table is also returned.
-    :param text_list: List containing tweets
-    :return: Encoded tweets and mapping dictionaries.
-    """
-    unique_chars = sorted({char for word in tweet_list for char in word})
-    mapping_char_to_int = {char: i for i, char in enumerate(unique_chars)}
-    mapping_int_to_char = {i: char for i, char in enumerate(unique_chars)}
-
-    encoded_tweets = []
-    for tweet in tweet_list:
-        tweet = list(tweet)
-        tweet = [mapping_char_to_int[char] for char in list(tweet)]
-        encoded_tweets.append(tweet)
-
-    return encoded_tweets, mapping_char_to_int, mapping_int_to_char
-
-
-def produce_dataset(tweet_list: list) -> Tuple[list, list]:
-    """
-    Generates the training dataset. The label is a letter and the features
-    consist of a sequence of chars coming before it, e.g. trum -> p, preside -> n.
-    :param tweet_list: List w/ tweets, best encoded as integers
-    :return: Tuple containing the dataset and accompanying labels.
-    """
-    dataset = []
-    label = []
-    for tweet in tqdm(tweet_list):
-        for i, char in enumerate(tweet):
-            if i != 0:
-                dataset.append(tweet[:i])
-                label.append(char)
-
-    print("Dataset consists of {} samples.".format(len(dataset)))
-    return dataset, label
+    index = np.arange(x.shape[0])
+    x_sampled = []
+    for i in range(x.shape[1]):
+        down_x, down_y = lttb(index, x[:, i], threshold)
+        x_sampled.append(down_y)
+    return np.vstack(x_sampled).T
 
 
 if __name__ == '__main__':
