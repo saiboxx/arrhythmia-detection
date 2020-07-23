@@ -12,15 +12,10 @@ DOWNSAMPLE_THRESHOLD: 200
 ###############################################################################
 SUMMARY_PATH: logs
 
-EPOCHS: 100
-BATCH_SIZE: 2048
-HIDDEN_SIZE: 256
+MODEL: CNN
+EPOCHS: 50
+BATCH_SIZE: 256
+HIDDEN_SIZE: 64
 NUM_LAYERS: 1
-DROPOUT: 0
+DROPOUT: 0.3
 LR: 0.001
-
-###############################################################################
-# SET INFERENCE PARAMETERS                                                    #
-###############################################################################
-MODEL: LSTM
-MODEL_PATH: models/LSTM/2.pt

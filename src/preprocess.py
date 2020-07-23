@@ -1,5 +1,4 @@
 import os
-import re
 from typing import Tuple
 import numpy as np
 import pandas as pd
@@ -8,6 +7,8 @@ import multiprocessing as mp
 from tqdm import tqdm
 from collections import Counter
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import KNNImputer
 from src.utils import Timer, load_config, save_pickle
 
 
@@ -30,6 +31,9 @@ def main():
                                 cfg['DATA_SLICE'],
                                 cfg['NUM_WORKERS'])
 
+    with Timer('Imputing missing values'):
+        ecg_data = impute_nans(ecg_data)
+
     with Timer('Splitting into Train & Test Set'):
         x_train, x_test, y_train, y_test = train_test_split(ecg_data,
                                                             labels,
@@ -42,6 +46,9 @@ def main():
         print('Final Test set has {} samples'.format(len(x_test)))
         print('Distribution of labels in Training: {}'.format(Counter(y_train)))
         print('Distribution of labels in Testing: {}'.format(Counter(y_test)))
+
+    with Timer('Normalizing data'):
+        x_train, x_test = normalize_data(x_train, x_test)
 
     with Timer('Saving generated arrays'):
         save_pickle(x_train, cfg['PROCESSED_DATA_DIR'] + '/train_data.pkl')
@@ -127,6 +134,21 @@ def downsample(x: np.ndarray, threshold: int) -> np.ndarray:
         down_x, down_y = lttb(index, x[:, i], threshold)
         x_sampled.append(down_y)
     return np.vstack(x_sampled).T
+
+
+def impute_nans(x: np.ndarray) -> np.ndarray:
+    for i in range(x.shape[0]):
+        x[i] = KNNImputer().fit_transform(x[i])
+
+    assert np.nonzero(~np.isnan(x))
+    return x
+
+
+def normalize_data(train: np.ndarray, test: np.ndarray) -> np.ndarray:
+    scaler = StandardScaler()
+    train = scaler.fit_transform(train.reshape(-1, train.shape[-1])).reshape(train.shape)
+    test = scaler.transform(test.reshape(-1, test.shape[-1])).reshape(test.shape)
+    return train, test
 
 
 if __name__ == '__main__':

@@ -2,7 +2,8 @@ import os
 import pickle
 from datetime import datetime
 from typing import Optional
-
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import torch
 import yaml
 from torch import tensor
@@ -14,25 +15,125 @@ class TrackingAgent(object):
         self.batch_size = batch_size
         self.num_samples = num_samples
 
-        self.losses = []
-        self.correct_class = 0
+        self.stats = {
+            'train_loss': [],
+            'test_loss': [],
+            'train_acc': [],
+            'test_acc': [],
+            'train_prec': [],
+            'test_prec': [],
+            'train_rec': [],
+            'test_rec': [],
+            'train_f1': [],
+            'test_f1': []
+        }
 
-    def add_loss(self, loss: tensor):
-        self.losses.append(float(loss))
+        self.train_losses = []
+        self.test_losses = []
+        self.train_truth = []
+        self.train_pred = []
+        self.test_truth = []
+        self.test_pred = []
 
-    def add_correct_class(self, y_hat: tensor, y: tensor):
+    def add_train_loss(self, loss: tensor):
+        self.train_losses.append(float(loss))
+
+    def add_test_loss(self, loss: tensor):
+        self.test_losses.append(float(loss))
+
+    def add_train_prediction(self, y_hat: tensor, y: tensor):
         with torch.no_grad():
-            self.correct_class += (torch.argmax(y_hat, dim=1) == y).float().sum()
+            self.train_truth.extend(y.tolist())
+            self.train_pred.extend((torch.argmax(y_hat, dim=1).tolist()))
 
-    def get_loss(self) -> float:
-        return sum(self.losses) / len(self.losses)
+    def add_test_prediction(self, y_hat: tensor, y: tensor):
+        with torch.no_grad():
+            self.test_truth.extend(y.tolist())
+            self.test_pred.extend((torch.argmax(y_hat, dim=1).tolist()))
 
-    def get_accuracy(self) -> float:
-        return self.correct_class / self.num_samples
+    def get_train_loss(self) -> float:
+        loss = sum(self.train_losses) / len(self.train_losses)
+        self.stats['train_loss'].append(loss)
+        return loss
+
+    def get_test_loss(self) -> float:
+        loss = sum(self.test_losses) / len(self.test_losses)
+        self.stats['test_loss'].append(loss)
+        return loss
+
+    def get_train_metrics(self):
+        acc = accuracy_score(self.train_truth, self.train_pred)
+        prec, rec, fscore, _ = precision_recall_fscore_support(self.train_truth,
+                                                               self.train_pred,
+                                                               average='macro')
+
+        self.stats['train_acc'].append(acc)
+        self.stats['train_prec'].append(prec)
+        self.stats['train_rec'].append(rec)
+        self.stats['train_f1'].append(fscore)
+        return acc, prec, rec, fscore
+
+    def get_test_metrics(self):
+        acc = accuracy_score(self.test_truth, self.test_pred)
+        prec, rec, fscore, _ = precision_recall_fscore_support(self.test_truth,
+                                                               self.test_pred,
+                                                               average='macro')
+        self.stats['test_acc'].append(acc)
+        self.stats['test_prec'].append(prec)
+        self.stats['test_rec'].append(rec)
+        self.stats['test_f1'].append(fscore)
+        return acc, prec, rec, fscore
+
+    def get_plots(self, show: Optional[bool] = False):
+        x_axis = [x for x in range(len(self.stats['train_loss']))]
+        fig = plt.figure(figsize=(10, 10))
+
+        ax1 = plt.subplot(4, 1, 1)
+        ln1 = ax1.plot(x_axis, self.stats['train_loss'], label='Train Loss')
+        ln2 = ax1.plot(x_axis, self.stats['test_loss'], label='Test Loss')
+        ax2 = ax1.twinx()
+        ln3 = ax2.plot(x_axis, self.stats['train_acc'], 'g', label='Train Accuracy')
+        ln4 = ax2.plot(x_axis, self.stats['test_acc'], 'r', label='Test Accuracy')
+        lns = ln1 + ln2 + ln3 + ln4
+        labs = [l.get_label() for l in lns]
+        ax1.legend(lns, labs, loc='center right')
+        plt.title('Loss & Accuracy')
+
+        ax3 = plt.subplot(4, 1, 2)
+        ax3.plot(x_axis, self.stats['train_prec'], label='Train Precision')
+        ax3.plot(x_axis, self.stats['test_prec'], label='Test Precision')
+        ax3.legend(loc='upper left')
+        plt.title('Precision')
+
+        ax4 = plt.subplot(4, 1, 3)
+        ax4.plot(x_axis, self.stats['train_rec'], label='Train Recall')
+        ax4.plot(x_axis, self.stats['test_rec'], label='Test Recall')
+        ax4.legend(loc='upper left')
+        plt.title('Recall')
+
+        ax5 = plt.subplot(4, 1, 4)
+        ax5.plot(x_axis, self.stats['train_f1'], label='Train F1-Score')
+        ax5.plot(x_axis, self.stats['test_f1'], label='Test F1-Score')
+        ax5.legend(loc='upper left')
+        plt.title('F1-Score')
+
+        fig.tight_layout()
+
+        os.makedirs('plots', exist_ok=True)
+        fig.savefig('plots/results.pdf', bbox_inches='tight')
+
+        save_pickle(self.stats, 'plots/stats.pkl')
+
+        if show:
+            plt.show()
 
     def reset(self):
-        self.losses = []
-        self.correct_class = 0
+        self.train_losses = []
+        self.test_losses = []
+        self.train_truth = []
+        self.train_pred = []
+        self.test_truth = []
+        self.test_pred = []
 
 
 class SummaryAgent(object):

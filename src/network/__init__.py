@@ -1,30 +1,32 @@
-from typing import Tuple
+from typing import Optional
 
 import torch
 from torch import nn, tensor
 from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pack_sequence
 
 from src.utils import load_pickle
 
 
-class TweetDataset(Dataset):
+class ECGDataset(Dataset):
     """
     PyTorch Dataset class for tweets that are preprocessed through "make preprocess".
     """
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, test: Optional[bool] = False):
         """
         Loads dataset to memory and transforms it to tensor.
         :param root: Directory where data files are located
         """
         self.root = root
 
-        self.train = load_pickle(root + '/train_medium.pkl')
-        self.label = torch.tensor(load_pickle(root + '/label_medium.pkl'))
+        if test:
+            self.data = tensor(load_pickle(root + '/test_data.pkl'), dtype=torch.float)
+            self.label = tensor(load_pickle(root + '/test_label.pkl'), dtype=torch.long)
+        else:
+            self.data = tensor(load_pickle(root + '/train_data.pkl'), dtype=torch.float)
+            self.label = tensor(load_pickle(root + '/train_label.pkl'), dtype=torch.long)
 
-        self.num_classes = max(max(self.train)) + 1
-        self.ohe_mapping = torch.eye(self.num_classes)
+        self.num_classes = int(max(self.label) + 1)
 
     def __len__(self) -> int:
         """
@@ -33,30 +35,59 @@ class TweetDataset(Dataset):
         """
         return len(self.label)
 
-    def __getitem__(self, idx: int) -> Tuple:
+    def __getitem__(self, idx: int) -> dict:
         """
-        Given an index, return the corresponding one-hot encoded data pair.
+        Given an index, return the corresponding data pair.
         :param idx: Index of entry in dataset
-        :return: Tuple w/ sequence as one hot encoding and label.
+        :return: Dict w/ sequence and label.
         """
-        tweet = self.ohe_mapping[self.train[idx]]
-        return tweet, self.label[idx]
+        return {'data': self.data[idx], 'label': self.label[idx]}
 
 
-def collate_var_sequences(batch: list) -> dict:
-    """
-    Custom collate function to handle sequences of varying length.
-    :param batch: List of samples obtained from Dataset
-    :return: Collated dict of samples.
-    """
-    tweets = pack_sequence(sequences=[b[0] for b in batch], enforce_sorted=False)
-    label = torch.stack([b[1] for b in batch])
-    return {'tweet': tweets, 'label': label}
+class ModelFactory(object):
+    def __init__(self, config: dict, num_classes: int, input_size: int, input_length: int):
+        self.config = config
+        self.num_classes = num_classes
+        self.input_size = input_size
+        self.input_length = input_length
+
+    def get(self):
+        model_name = self.config['MODEL']
+
+        if model_name == 'LSTM':
+            model = LSTMPredictor(num_classes=self.num_classes,
+                                  input_size=self.input_size,
+                                  hidden_size=self.config['HIDDEN_SIZE'],
+                                  batch_size=self.config['BATCH_SIZE'],
+                                  num_layers=self.config['NUM_LAYERS'],
+                                  drop_out=self.config['DROPOUT'])
+        elif model_name == 'GRU':
+            model = GRUPredictor(num_classes=self.num_classes,
+                                 input_size=self.input_size,
+                                 hidden_size=self.config['HIDDEN_SIZE'],
+                                 batch_size=self.config['BATCH_SIZE'],
+                                 num_layers=self.config['NUM_LAYERS'],
+                                 drop_out=self.config['DROPOUT'])
+
+        elif model_name == 'CNN':
+            model = CNNPredictor(num_classes=self.num_classes,
+                                 input_size=self.input_size,
+                                 input_length=self.input_length,
+                                 batch_size=self.config['BATCH_SIZE'])
+
+        else:
+            raise ValueError('Supplied model is no valid option!')
+
+        num_params = sum(p.numel() for p in model.parameters())
+        print('{0} model has {1} parameters.'.format(model_name, num_params))
+
+        return model
 
 
 class LSTMPredictor(nn.Module):
     def __init__(self,
                  num_classes: int,
+                 input_size: int,
                  hidden_size: int,
                  batch_size: int,
                  num_layers: int,
@@ -65,13 +96,14 @@ class LSTMPredictor(nn.Module):
         self.name = "LSTM"
         self.num_classes = num_classes
         self.batch_size = batch_size
+        self.input_size = input_size
         self.hidden_size = hidden_size
 
         self.num_layers = num_layers
         self.drop_out = drop_out
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.lstm = nn.LSTM(input_size=self.num_classes,
+        self.lstm = nn.LSTM(input_size=self.input_size,
                             hidden_size=hidden_size,
                             num_layers=self.num_layers,
                             batch_first=True,
@@ -85,9 +117,70 @@ class LSTMPredictor(nn.Module):
         return x
 
 
+class CNNPredictor(nn.Module):
+    def __init__(self,
+                 num_classes: int,
+                 input_size: int,
+                 batch_size: int,
+                 input_length: int):
+        super(CNNPredictor, self).__init__()
+        self.name = "CNN"
+        self.num_classes = num_classes
+        self.batch_size = batch_size
+        self.input_size = input_size
+        self.input_length = input_length
+
+        self.pool = nn.MaxPool1d(2)
+        self.elu = nn.ELU()
+
+        self.conv1 = nn.Conv1d(in_channels=self.input_size,
+                               out_channels=128,
+                               kernel_size=5)
+        self.conv2 = nn.Conv1d(in_channels=128,
+                               out_channels=64,
+                               kernel_size=5)
+        self.conv3 = nn.Conv1d(in_channels=64,
+                               out_channels=32,
+                               kernel_size=3)
+
+        self.fc_size = self.get_fc_size()
+
+        self.fc1 = nn.Linear(in_features=self.fc_size, out_features=64)
+        self.fc2 = nn.Linear(in_features=64, out_features=self.num_classes)
+
+    def get_fc_size(self):
+        with torch.no_grad():
+            x = torch.ones((1, self.input_size, self.input_length))
+            x = self.conv1(x)
+            x = self.pool(x)
+            x = self.conv2(x)
+            x = self.pool(x)
+            x = self.conv3(x)
+            x = self.pool(x)
+            return len(x.flatten())
+
+    def forward(self, x: tensor) -> tensor:
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.elu(x)
+        x = self.pool(x)
+        x = self.conv2(x)
+        x = self.elu(x)
+        x = self.pool(x)
+        x = self.conv3(x)
+        x = self.elu(x)
+        x = self.pool(x)
+        x = x.view(-1, 32 * 22)
+        x = self.fc1(x)
+        x = self.elu(x)
+        x = self.fc2(x)
+        return x
+
+
 class GRUPredictor(nn.Module):
     def __init__(self,
                  num_classes: int,
+                 input_size: int,
                  hidden_size: int,
                  batch_size: int,
                  num_layers: int,
@@ -96,13 +189,14 @@ class GRUPredictor(nn.Module):
         self.name = "GRU"
         self.num_classes = num_classes
         self.batch_size = batch_size
+        self.input_size = input_size
         self.hidden_size = hidden_size
 
         self.num_layers = num_layers
         self.drop_out = drop_out
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.gru = nn.GRU(input_size=self.num_classes,
+        self.gru = nn.GRU(input_size=self.input_size,
                           hidden_size=hidden_size,
                           num_layers=self.num_layers,
                           batch_first=True,
