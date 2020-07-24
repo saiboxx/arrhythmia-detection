@@ -10,5 +10,7 @@ jupyter
 pylttb
 xlrd
 sklearn
+psutil
+nvidia-ml-py3
 
 -e .

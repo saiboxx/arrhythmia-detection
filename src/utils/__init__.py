@@ -1,9 +1,13 @@
 import os
 import pickle
+import psutil
+import nvidia_smi
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from time import time
+import warnings
 import torch
 import yaml
 from torch import tensor
@@ -14,6 +18,9 @@ class TrackingAgent(object):
     def __init__(self, batch_size: int, num_samples: int):
         self.batch_size = batch_size
         self.num_samples = num_samples
+        self.time = None
+        nvidia_smi.nvmlInit()
+        self.gpu_handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
 
         self.stats = {
             'train_loss': [],
@@ -34,6 +41,12 @@ class TrackingAgent(object):
         self.train_pred = []
         self.test_truth = []
         self.test_pred = []
+
+        self.epoch_time = None
+        self.cpu_usage = None
+        self.gpu_usage = None
+
+        warnings.filterwarnings('always')
 
     def add_train_loss(self, loss: tensor):
         self.train_losses.append(float(loss))
@@ -61,10 +74,11 @@ class TrackingAgent(object):
         self.stats['test_loss'].append(loss)
         return loss
 
-    def get_train_metrics(self):
+    def get_train_metrics(self) -> Tuple:
         acc = accuracy_score(self.train_truth, self.train_pred)
         prec, rec, fscore, _ = precision_recall_fscore_support(self.train_truth,
                                                                self.train_pred,
+                                                               warn_for=tuple(),
                                                                average='macro')
 
         self.stats['train_acc'].append(acc)
@@ -73,10 +87,11 @@ class TrackingAgent(object):
         self.stats['train_f1'].append(fscore)
         return acc, prec, rec, fscore
 
-    def get_test_metrics(self):
+    def get_test_metrics(self) -> Tuple:
         acc = accuracy_score(self.test_truth, self.test_pred)
         prec, rec, fscore, _ = precision_recall_fscore_support(self.test_truth,
                                                                self.test_pred,
+                                                               warn_for=tuple(),
                                                                average='macro')
         self.stats['test_acc'].append(acc)
         self.stats['test_prec'].append(prec)
@@ -102,19 +117,19 @@ class TrackingAgent(object):
         ax3 = plt.subplot(4, 1, 2)
         ax3.plot(x_axis, self.stats['train_prec'], label='Train Precision')
         ax3.plot(x_axis, self.stats['test_prec'], label='Test Precision')
-        ax3.legend(loc='upper left')
+        ax3.legend(loc='lower right')
         plt.title('Precision')
 
         ax4 = plt.subplot(4, 1, 3)
         ax4.plot(x_axis, self.stats['train_rec'], label='Train Recall')
         ax4.plot(x_axis, self.stats['test_rec'], label='Test Recall')
-        ax4.legend(loc='upper left')
+        ax4.legend(loc='lower right')
         plt.title('Recall')
 
         ax5 = plt.subplot(4, 1, 4)
         ax5.plot(x_axis, self.stats['train_f1'], label='Train F1-Score')
         ax5.plot(x_axis, self.stats['test_f1'], label='Test F1-Score')
-        ax5.legend(loc='upper left')
+        ax5.legend(loc='lower right')
         plt.title('F1-Score')
 
         fig.tight_layout()
@@ -127,6 +142,21 @@ class TrackingAgent(object):
         if show:
             plt.show()
 
+    def start_time(self):
+        self.time = time()
+
+    def stop_time(self):
+        self.epoch_time = time() - self.time
+
+    def add_cpu_usage(self):
+        self.cpu_usage = psutil.cpu_percent()
+
+    def add_gpu_usage(self):
+        self.gpu_usage = nvidia_smi.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+
+    def get_performance_metrics(self) -> Tuple:
+        return self.cpu_usage, self.gpu_usage
+
     def reset(self):
         self.train_losses = []
         self.test_losses = []
@@ -134,6 +164,10 @@ class TrackingAgent(object):
         self.train_pred = []
         self.test_truth = []
         self.test_pred = []
+
+        self.epoch_time = None
+        self.cpu_usage = None
+        self.gpu_usage = None
 
 
 class SummaryAgent(object):
@@ -174,7 +208,7 @@ class SummaryAgent(object):
 
     def save_model(self, model: torch.nn.Module):
         path = os.path.join(self.model_dir, str(self.episode) + '.pt')
-        torch.save(model.state_dict(), path)
+        torch.save(model, path)
 
     def add_scalar(self, tag: str, value):
         """

@@ -9,3 +9,6 @@ preprocess:
 
 train:
 	$(PYTHON_INTERPRETER) src/train.py
+
+inference:
+	$(PYTHON_INTERPRETER) src/inference.py

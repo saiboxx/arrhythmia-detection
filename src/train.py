@@ -45,6 +45,7 @@ def main():
     print('Start training with {} epochs'.format(cfg['EPOCHS']))
     for e in range(1, cfg['EPOCHS'] + 1):
 
+        tracker.start_time()
         model.train()
         for i_batch, sample_batched in enumerate(tqdm(train_loader, leave=False)):
             x_sequence = sample_batched['data'].to(device)
@@ -59,6 +60,10 @@ def main():
 
             tracker.add_train_loss(batch_loss)
             tracker.add_train_prediction(y_hat, y)
+
+        tracker.stop_time()
+        tracker.add_cpu_usage()
+        tracker.add_gpu_usage()
 
         model.eval()
         for i_batch, sample_batched in enumerate(test_loader):
@@ -86,6 +91,12 @@ def main():
         summary.add_scalar('Test Precision', test_metrics[1])
         summary.add_scalar('Test Recall', test_metrics[2])
         summary.add_scalar('Test F1-Score', test_metrics[3])
+
+        cpu, gpu = tracker.get_performance_metrics()
+        summary.add_scalar('CPU Utilization', cpu)
+        summary.add_scalar('GPU Utilization', gpu)
+        summary.add_scalar('Epoch Time', tracker.epoch_time)
+
 
         tracker.reset()
         summary.save_model(model)
