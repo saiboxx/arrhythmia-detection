@@ -3,9 +3,9 @@
 ###############################################################################
 RAW_DATA_PATH: data/raw
 PROCESSED_DATA_DIR: data/processed
-DATA_SLICE: 1500
+DATA_SLICE: 2500
 NUM_WORKERS: 4
-DOWNSAMPLE_THRESHOLD: 200
+DOWNSAMPLE_THRESHOLD: 350
 
 ###############################################################################
 # SET TRAINING PARAMETERS                                                     #
@@ -13,11 +13,11 @@ DOWNSAMPLE_THRESHOLD: 200
 SUMMARY_PATH: logs
 
 MODEL: LSTM
-EPOCHS: 50
+EPOCHS: 100
 BATCH_SIZE: 64
-HIDDEN_SIZE: 256
-NUM_LAYERS: 3
-DROPOUT: 0.5
+HIDDEN_SIZE: 128
+NUM_LAYERS: 2
+DROPOUT: 0.3
 LR: 0.001
 
 ###############################################################################

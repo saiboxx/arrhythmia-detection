@@ -9,7 +9,7 @@ from src.utils import load_pickle
 
 class ECGDataset(Dataset):
     """
-    PyTorch Dataset class for tweets that are preprocessed through "make preprocess".
+    PyTorch Dataset class for ECGs that are preprocessed through "make preprocess".
     """
 
     def __init__(self, root: str, test: Optional[bool] = False):
@@ -45,13 +45,29 @@ class ECGDataset(Dataset):
 
 
 class ModelFactory(object):
+    """
+    Factory that returns the model described in the configuration.
+    """
+
     def __init__(self, config: dict, num_classes: int, input_size: int, input_length: int):
+        """
+        Initialize a model factory.
+        :param config: Config file as dictionary
+        :param num_classes: Number of classes in the dataset
+        :param input_size: Number of input features
+        :param input_length: Length of input sequence
+        """
         self.config = config
         self.num_classes = num_classes
         self.input_size = input_size
         self.input_length = input_length
 
-    def get(self):
+    def get(self) -> nn.Module:
+        """
+        Get a ready-to-train PyTorch model.
+        Depending on the choice in the config file a LSTM, GRU or CNN is returned.
+        :return: A PyTorch module
+        """
         model_name = self.config['MODEL']
 
         if model_name == 'LSTM':
@@ -85,6 +101,10 @@ class ModelFactory(object):
 
 
 class LSTMPredictor(nn.Module):
+    """
+    LSTM model for classifying sequences.
+    """
+
     def __init__(self,
                  num_classes: int,
                  input_size: int,
@@ -92,6 +112,15 @@ class LSTMPredictor(nn.Module):
                  batch_size: int,
                  num_layers: int,
                  drop_out: int):
+        """
+        Initialize a LSTM model.
+        :param num_classes: Number of target classes
+        :param input_size: Number of input features
+        :param hidden_size: Size of hidden dimensions
+        :param batch_size: Batch size used for training
+        :param num_layers: Number of LSTM layers.
+        :param drop_out: Dropout probability between LSTM layers.
+        """
         super(LSTMPredictor, self).__init__()
         self.name = "LSTM"
         self.num_classes = num_classes
@@ -112,17 +141,32 @@ class LSTMPredictor(nn.Module):
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x: tensor) -> tensor:
+        """
+        Propagate a tensor through the model
+        :param x: Training data with shape (batch_size, seq_len, num_features)
+        :return: Class scores with shape (batch_size, num_classes)
+        """
         output, (hidden, cell) = self.lstm(x)
-        x = self.fc(hidden[-1])
-        return x
+        return self.fc(hidden[-1])
 
 
 class CNNPredictor(nn.Module):
+    """
+    CNN model for classifying sequences.
+    """
+
     def __init__(self,
                  num_classes: int,
                  input_size: int,
                  batch_size: int,
                  input_length: int):
+        """
+        Initialize a CNN model.
+        :param num_classes: Number of target classes
+        :param input_size: Number of input features
+        :param batch_size: Batch size used for training
+        :param input_length: Length of input sequence
+        """
         super(CNNPredictor, self).__init__()
         self.name = "CNN"
         self.num_classes = num_classes
@@ -130,54 +174,56 @@ class CNNPredictor(nn.Module):
         self.input_size = input_size
         self.input_length = input_length
 
-        self.pool = nn.MaxPool1d(2)
-        self.elu = nn.ELU()
+        self.filters = 32
+        self.num_layers = 5
 
-        self.conv1 = nn.Conv1d(in_channels=self.input_size,
-                               out_channels=128,
-                               kernel_size=5)
-        self.conv2 = nn.Conv1d(in_channels=128,
-                               out_channels=64,
-                               kernel_size=5)
-        self.conv3 = nn.Conv1d(in_channels=64,
-                               out_channels=32,
-                               kernel_size=3)
+        self.conv_layers = [
+            nn.Sequential(
+                nn.Conv1d(in_channels=self.input_size,
+                          out_channels=self.filters,
+                          kernel_size=5,
+                          stride=2),
+                nn.LeakyReLU(),
+                nn.MaxPool1d(2)
+            )]
 
-        self.fc_size = self.get_fc_size()
+        for _ in range(self.num_layers - 2):
+            self.conv_layers.append(
+                nn.Sequential(
+                    nn.Conv1d(in_channels=self.filters,
+                              out_channels=self.filters,
+                              kernel_size=3,
+                              stride=1),
+                    nn.LeakyReLU(),
+                    nn.MaxPool1d(2)
+                )
+            )
 
-        self.fc1 = nn.Linear(in_features=self.fc_size, out_features=64)
-        self.fc2 = nn.Linear(in_features=64, out_features=self.num_classes)
+        self.conv_layers.append(
+            nn.Conv1d(in_channels=self.filters,
+                      out_channels=self.num_classes,
+                      kernel_size=3)
+        )
 
-    def get_fc_size(self):
-        with torch.no_grad():
-            x = torch.ones((1, self.input_size, self.input_length))
-            x = self.conv1(x)
-            x = self.pool(x)
-            x = self.conv2(x)
-            x = self.pool(x)
-            x = self.conv3(x)
-            x = self.pool(x)
-            return len(x.flatten())
+        self.conv_layers = nn.Sequential(*self.conv_layers)
 
     def forward(self, x: tensor) -> tensor:
+        """
+        Propagate a tensor through the model
+        :param x: Training data with shape (batch_size, seq_len, num_features)
+        :return: Class scores with shape (batch_size, num_classes)
+        """
         x = x.permute(0, 2, 1)
-        x = self.conv1(x)
-        x = self.elu(x)
-        x = self.pool(x)
-        x = self.conv2(x)
-        x = self.elu(x)
-        x = self.pool(x)
-        x = self.conv3(x)
-        x = self.elu(x)
-        x = self.pool(x)
-        x = x.view(-1, 32 * 22)
-        x = self.fc1(x)
-        x = self.elu(x)
-        x = self.fc2(x)
-        return x
+        for layer in self.conv_layers:
+            x = layer(x)
+        return torch.mean(x, dim=2)
 
 
 class GRUPredictor(nn.Module):
+    """
+    GRU model for classifying sequences.
+    """
+
     def __init__(self,
                  num_classes: int,
                  input_size: int,
@@ -185,6 +231,15 @@ class GRUPredictor(nn.Module):
                  batch_size: int,
                  num_layers: int,
                  drop_out: int):
+        """
+        Initialize a GRU model.
+        :param num_classes: Number of target classes
+        :param input_size: Number of input features
+        :param hidden_size: Size of hidden dimensions
+        :param batch_size: Batch size used for training
+        :param num_layers: Number of GRU layers.
+        :param drop_out: Dropout probability between GRU layers.
+        """
         super(GRUPredictor, self).__init__()
         self.name = "GRU"
         self.num_classes = num_classes
@@ -205,6 +260,10 @@ class GRUPredictor(nn.Module):
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x: tensor) -> tensor:
+        """
+        Propagate a tensor through the model
+        :param x: Training data with shape (batch_size, seq_len, num_features)
+        :return: Class scores with shape (batch_size, num_classes)
+        """
         output, hidden = self.gru(x)
-        x = self.fc(hidden[-1])
-        return x
+        return self.fc(hidden[-1])

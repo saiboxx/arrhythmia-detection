@@ -23,6 +23,7 @@ def main():
                               shuffle=True,
                               num_workers=4,
                               pin_memory=True)
+
     test_loader = DataLoader(dataset=test_data,
                              batch_size=cfg['BATCH_SIZE'],
                              num_workers=4,
@@ -39,7 +40,7 @@ def main():
     loss = CrossEntropyLoss()
 
     print('Initializing Helper Agents.')
-    tracker = TrackingAgent(cfg['BATCH_SIZE'], len(train_data))
+    tracker = TrackingAgent()
     summary = SummaryAgent(cfg['SUMMARY_PATH'], model.name, cfg)
 
     print('Start training with {} epochs'.format(cfg['EPOCHS']))
@@ -97,7 +98,6 @@ def main():
         summary.add_scalar('GPU Utilization', gpu)
         summary.add_scalar('Epoch Time', tracker.epoch_time)
 
-
         tracker.reset()
         summary.save_model(model)
         summary.adv_episode()
@@ -107,7 +107,7 @@ def main():
               .format(e, train_loss, train_metrics[0], test_loss, test_metrics[0]))
 
     summary.close()
-    tracker.get_plots(show=True)
+    tracker.get_plots(show=False)
 
 
 if __name__ == '__main__':
