@@ -1,7 +1,7 @@
 # ECG Arrhythmia Detection and Classification
 
 This project aims to examine recurrent and convolutional approaches for identifying arrhythmias in ECGs.
-An extended project report is available here. The data can be downloaded [here](https://figshare.com/collections/ChapmanECG/4560497/2).
+An extended project report is available [here](report/IAAML_arrythmia_detection.pdf). The data can be downloaded [here](https://figshare.com/collections/ChapmanECG/4560497/2).
 Relevant source code is in 'src'.
 
 ## How to use
@@ -29,9 +29,14 @@ Relevant source code is in 'src'.
     ```
     make train
     ```
-
-4. Enjoy your model. After training your model will be in '/models'. Plots are in '/plots'.
-5. Make some predictions. If you have some data, where you want to apply your model, enter the relevant params in the config and start inference.
+   
+4. Track training via tensorboard
+    ```
+    tensorboard --logdir=logs
+    ```
+    
+5. Enjoy your model. After training your model will be in '/models'. Plots are in '/plots'.
+6. Make some predictions. If you have some data, where you want to apply your model, enter the relevant params in the config and start inference.
     ```
     make inference
     ```
