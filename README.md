@@ -12,7 +12,7 @@ Relevant source code is in 'src'.
     ```
 2. I recommend to create an own python virtual environment and activate it:
     ```
-    cd offline-reinforcement-learning
+    cd arrhythmia-detection
     python -m venv .venv
     source .venv/bin/activate
     ```
